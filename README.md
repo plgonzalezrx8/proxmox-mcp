@@ -1,6 +1,6 @@
 # proxmox-mcp
 
-A Model Context Protocol (MCP) server for Proxmox VE.
+A Docker-first Model Context Protocol (MCP) server for Proxmox VE.
 
 It exposes safe, structured tools for read-only cluster inspection, VM/container lifecycle operations, snapshots, migration, provisioning helpers, and a guarded generic Proxmox API escape hatch.
 
@@ -8,46 +8,115 @@ It exposes safe, structured tools for read-only cluster inspection, VM/container
 
 Alpha. Built with API-token auth and explicit confirmation gates for mutating operations.
 
-## Configuration
+## Run with Docker Compose
+
+Docker Compose is the primary supported way to run this MCP server.
+
+```bash
+cp .env.example .env
+# edit .env with your Proxmox URL and token
+docker compose up -d --build
+```
+
+By default the MCP server listens on:
+
+```text
+http://127.0.0.1:8000/mcp
+```
+
+Default MCP transport settings in `.env.example`:
+
+```env
+MCP_TRANSPORT=streamable-http
+MCP_PORT=8000
+MCP_PATH=/mcp
+```
+
+Inside Docker, the app binds to `0.0.0.0` in the container, but Compose publishes it only on host loopback by default:
+
+```yaml
+ports:
+  - "127.0.0.1:8000:8000"
+```
+
+Do not publish this unauthenticated MCP endpoint on all interfaces unless you put real network controls in front of it.
+
+Supported MCP transports:
+
+- `streamable-http` — default for Docker and most remote deployments
+- `sse` — legacy HTTP/SSE MCP transport
+- `stdio` — local subprocess mode
+
+For HTTPS exposure of the MCP endpoint, put this service behind a reverse proxy such as Caddy, Traefik, or nginx and terminate TLS there. Keep the container on plain HTTP internally unless you have a specific reason to do otherwise.
+
+## Proxmox protocol configuration
+
+Prefer HTTPS for the Proxmox API:
+
+```env
+PVE_BASE_URL=https://proxmox.lan:8006
+PVE_VERIFY_SSL=false # only for self-signed homelab certs
+```
+
+If you intentionally need plain HTTP for Proxmox, make it explicit:
+
+```env
+PVE_BASE_URL=http://proxmox.lan:8006
+PVE_ALLOW_INSECURE_HTTP=true
+```
+
+Plain HTTP sends credentials over the network. That is usually a bad idea outside a tightly controlled lab network.
+
+## Authentication
 
 Prefer a Proxmox API token:
 
-```bash
-export PVE_BASE_URL="https://proxmox.lan:8006"
-export PVE_API_TOKEN_ID="user@pam!token-name"
-export PVE_API_TOKEN_SECRET="secret-value"
-export PVE_VERIFY_SSL="false" # only for self-signed homelab certs
+```env
+PVE_API_TOKEN_ID=user@pam!token-name
+PVE_API_TOKEN_SECRET=replace-me
 ```
 
 Password-ticket auth is also supported, but API tokens are cleaner for MCP:
 
-```bash
-export PVE_USERNAME="user@pam"
-export PVE_PASSWORD="password"
+```env
+PVE_USERNAME=user@pam
+PVE_PASSWORD=replace-me
 ```
 
-## Run
-
-```bash
-uvx proxmox-mcp
-# or from a checkout:
-uv run proxmox-mcp
-```
-
-## Hermes config
+## Hermes config for Docker HTTP MCP
 
 ```yaml
 mcp_servers:
   proxmox:
-    command: "uvx"
-    args: ["proxmox-mcp"]
-    env:
-      PVE_BASE_URL: "https://proxmox.lan:8006"
-      PVE_API_TOKEN_ID: "user@pam!token-name"
-      PVE_API_TOKEN_SECRET: "..."
-      PVE_VERIFY_SSL: "false"
+    url: "http://127.0.0.1:8000/mcp"
     timeout: 120
     connect_timeout: 30
+```
+
+If deployed on a remote host behind TLS:
+
+```yaml
+mcp_servers:
+  proxmox:
+    url: "https://proxmox-mcp.example.internal/mcp"
+    timeout: 120
+    connect_timeout: 30
+```
+
+## Run without Docker
+
+Local stdio mode remains available for development:
+
+```bash
+MCP_TRANSPORT=stdio uvx proxmox-mcp
+# or from a checkout:
+MCP_TRANSPORT=stdio uv run proxmox-mcp
+```
+
+Local HTTP mode without Docker:
+
+```bash
+MCP_TRANSPORT=streamable-http MCP_HOST=127.0.0.1 MCP_PORT=8000 MCP_PATH=/mcp uv run proxmox-mcp
 ```
 
 ## Safety model
@@ -56,7 +125,8 @@ mcp_servers:
 - `POST`, `PUT`, and `DELETE` require `confirm=true`.
 - High-level lifecycle/provisioning tools also require `confirm=true`.
 - Secrets are never intentionally returned.
-- Generic API paths reject full URLs and traversal attempts.
+- Generic API paths reject full URLs, query strings, fragments, traversal, encoded traversal, and encoded slash tricks.
+- Path segments are validated and encoded before being sent to Proxmox.
 
 ## Tool coverage
 

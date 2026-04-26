@@ -1,0 +1,35 @@
+services:
+  proxmox-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: proxmox-mcp:local
+    container_name: proxmox-mcp
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      MCP_TRANSPORT: ${MCP_TRANSPORT:-streamable-http}
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: ${MCP_PORT:-8000}
+      MCP_PATH: ${MCP_PATH:-/mcp}
+      PVE_BASE_URL: ${PVE_BASE_URL:?set PVE_BASE_URL in .env, e.g. https://proxmox.lan:8006}
+      PVE_API_TOKEN_ID: ${PVE_API_TOKEN_ID:-}
+      PVE_API_TOKEN_SECRET: ${PVE_API_TOKEN_SECRET:-}
+      PVE_USERNAME: ${PVE_USERNAME:-}
+      PVE_PASSWORD: ${PVE_PASSWORD:-}
+      PVE_VERIFY_SSL: ${PVE_VERIFY_SSL:-true}
+      PVE_ALLOW_INSECURE_HTTP: ${PVE_ALLOW_INSECURE_HTTP:-false}
+      PVE_TIMEOUT: ${PVE_TIMEOUT:-30}
+    ports:
+      - "127.0.0.1:${MCP_PORT:-8000}:${MCP_PORT:-8000}"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c 'import socket; s=socket.create_connection((\"127.0.0.1\", int(\"${MCP_PORT:-8000}\")), 5); s.close()'",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s

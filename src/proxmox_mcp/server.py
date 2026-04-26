@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import os
+from dataclasses import dataclass
 from functools import lru_cache
-from typing import Any
+from typing import Any, Literal
 
 from mcp.server.fastmcp import FastMCP
 
@@ -41,14 +43,49 @@ EXPECTED_TOOL_NAMES = [
 ]
 
 
+TransportName = Literal["stdio", "sse", "streamable-http"]
+
+
+@dataclass(frozen=True)
+class ServerSettings:
+    """Runtime MCP transport settings."""
+
+    transport: TransportName = "streamable-http"
+    host: str = "0.0.0.0"
+    port: int = 8000
+    mount_path: str = "/mcp"
+
+    @classmethod
+    def from_env(cls) -> ServerSettings:
+        transport = os.getenv("MCP_TRANSPORT", "streamable-http").strip().lower()
+        if transport not in {"stdio", "sse", "streamable-http"}:
+            raise ValueError("MCP_TRANSPORT must be one of: stdio, sse, streamable-http")
+        mount_path = os.getenv("MCP_PATH", "/mcp").strip()
+        if not mount_path.startswith("/") or "?" in mount_path or "#" in mount_path or not mount_path.strip("/"):
+            raise ValueError("MCP_PATH must be an absolute path like /mcp without query or fragment")
+        return cls(
+            transport=transport,  # type: ignore[arg-type]
+            host=os.getenv("MCP_HOST", "0.0.0.0"),
+            port=int(os.getenv("MCP_PORT", "8000")),
+            mount_path=mount_path,
+        )
+
+
 @lru_cache(maxsize=1)
 def _tools() -> ProxmoxTools:
     return ProxmoxTools()
 
 
-def create_server() -> FastMCP:
+def create_server(settings: ServerSettings | None = None) -> FastMCP:
     """Create and configure the Proxmox MCP server."""
-    mcp = FastMCP("proxmox-mcp")
+    settings = settings or ServerSettings.from_env()
+    mcp = FastMCP(
+        "proxmox-mcp",
+        host=settings.host,
+        port=settings.port,
+        streamable_http_path=settings.mount_path,
+        sse_path=settings.mount_path if settings.transport == "sse" else "/sse",
+    )
 
     @mcp.tool(name="pve_get_version")
     def pve_get_version() -> dict[str, Any]:
@@ -303,8 +340,9 @@ app = create_server()
 
 
 def main() -> None:
-    """Run the stdio MCP server."""
-    app.run()
+    """Run the MCP server using env-configured transport settings."""
+    settings = ServerSettings.from_env()
+    create_server(settings).run(transport=settings.transport, mount_path=settings.mount_path)
 
 
 if __name__ == "__main__":
